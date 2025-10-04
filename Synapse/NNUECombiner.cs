@@ -37,7 +37,7 @@ public static class NNUECombiner
         public string Description { get; set; } = string.Empty;
 
         /// <summary>Raw weights data (may be compressed)</summary>
-        public byte[] WeightsData { get; set; } = Array.Empty<byte>();
+        public byte[] WeightsData { get; set; } = [];
     }
 
     /// <summary>
