@@ -104,3 +104,6 @@ $RECYCLE.BIN/
 Networks/
 *.nnue
 *.bin
+
+# Documentation
+*.md
