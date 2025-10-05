@@ -18,6 +18,10 @@ bld/
 .vs/
 .vscode/
 
+# AI Tools
+.claude/
+.crush/
+
 # User-specific files
 *.rsuser
 *.suo

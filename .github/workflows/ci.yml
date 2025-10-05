@@ -1,0 +1,173 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ master, main, develop ]
+  pull_request:
+    branches: [ master, main, develop ]
+  release:
+    types: [ published ]
+
+env:
+  DOTNET_VERSION: '10.0.x'
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for better versioning
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore Synapse.sln
+
+    - name: Build solution
+      run: dotnet build Synapse.sln --configuration Release --no-restore
+
+    - name: Run tests
+      run: dotnet test Synapse.sln --configuration Release --no-build --verbosity normal --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+    - name: Upload coverage to Codecov
+      if: matrix.os == 'ubuntu-latest'
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./coverage/**/coverage.cobertura.xml
+        fail_ci_if_error: false
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-results-${{ matrix.os }}
+        path: ./coverage
+
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Restore dependencies
+      run: dotnet restore Synapse.sln
+
+    - name: Format check
+      run: dotnet format Synapse.sln --verify-no-changes --verbosity diagnostic || true
+
+  publish-artifacts:
+    name: Publish Artifacts
+    needs: [build-and-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Publish CLI (Windows x64)
+      run: |
+        dotnet publish Synapse.CLI/Synapse.CLI.csproj \
+          --configuration Release \
+          --runtime win-x64 \
+          --self-contained true \
+          --output ./publish/win-x64 \
+          -p:PublishSingleFile=true \
+          -p:PublishTrimmed=true
+
+    - name: Publish CLI (Linux x64)
+      run: |
+        dotnet publish Synapse.CLI/Synapse.CLI.csproj \
+          --configuration Release \
+          --runtime linux-x64 \
+          --self-contained true \
+          --output ./publish/linux-x64 \
+          -p:PublishSingleFile=true \
+          -p:PublishTrimmed=true
+
+    - name: Publish CLI (macOS x64)
+      run: |
+        dotnet publish Synapse.CLI/Synapse.CLI.csproj \
+          --configuration Release \
+          --runtime osx-x64 \
+          --self-contained true \
+          --output ./publish/osx-x64 \
+          -p:PublishSingleFile=true \
+          -p:PublishTrimmed=true
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: synapse-binaries
+        path: ./publish/**/*
+
+  release:
+    name: Create Release
+    needs: [build-and-test, publish-artifacts]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Create NuGet package
+      run: dotnet pack Synapse.Core/Synapse.Core.csproj --configuration Release --output ./packages
+
+    - name: Publish to NuGet
+      if: github.event.release.prerelease == false
+      run: dotnet nuget push ./packages/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate || true
+
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: synapse-binaries
+        path: ./publish
+
+    - name: Create release archives
+      run: |
+        cd publish
+        tar -czf ../synapse-win-x64.tar.gz win-x64/
+        tar -czf ../synapse-linux-x64.tar.gz linux-x64/
+        tar -czf ../synapse-osx-x64.tar.gz osx-x64/
+
+    - name: Upload release assets
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          synapse-win-x64.tar.gz
+          synapse-linux-x64.tar.gz
+          synapse-osx-x64.tar.gz
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
